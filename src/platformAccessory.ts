@@ -15,6 +15,7 @@ export class AirCondionerAccessory {
   private device: AuxCloudDevice;
   private currentState: DeviceState | null = null;
   private updateInterval?: NodeJS.Timeout;
+  private verificationTimeout?: NodeJS.Timeout;
   private readonly service: Service;
   private readonly informationService: Service;
   // Fan speed mapping helpers
@@ -126,7 +127,7 @@ export class AirCondionerAccessory {
       } catch (error) {
         this.platform.log.error(`Error updating state for ${this.device.friendlyName}:`, error);
       }
-    }, 10000);
+    }, 5000); // Reduced from 10 seconds to 5 seconds for more responsive updates
   }
 
   async updateState(): Promise<void> {
@@ -182,13 +183,35 @@ export class AirCondionerAccessory {
     try {
       const pct = typeof value === 'number' ? value : 0;
       const desiredSpeed = this.percentageToFanSpeed(pct);
-      const auxCloudAPI = await this.platform.getAuthenticatedAPI();
-      auxCloudAPI.setDevice(this.device);
-      await auxCloudAPI.setFanSpeed(desiredSpeed);
-      // Optimistically update local state so UI feels responsive
+      
+      // Optimistically update local state
       if (this.currentState) {
+        const oldSpeed = this.currentState.fanSpeed;
         this.currentState.fanSpeed = desiredSpeed;
+        this.service.getCharacteristic(this.platform.Characteristic.RotationSpeed)
+          .updateValue(pct);
+        
+        try {
+          const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+          auxCloudAPI.setDevice(this.device);
+          await auxCloudAPI.setFanSpeed(desiredSpeed);
+          
+          // Schedule verification update
+          this.scheduleVerificationUpdate();
+        } catch (apiError) {
+          // Revert optimistic update on API failure
+          this.currentState.fanSpeed = oldSpeed;
+          const revertPct = this.fanSpeedToPercentage(oldSpeed);
+          this.service.getCharacteristic(this.platform.Characteristic.RotationSpeed)
+            .updateValue(revertPct);
+          throw apiError;
+        }
+      } else {
+        const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+        auxCloudAPI.setDevice(this.device);
+        await auxCloudAPI.setFanSpeed(desiredSpeed);
       }
+      
       callback();
     } catch (error) {
       callback(error as Error);
@@ -198,11 +221,30 @@ export class AirCondionerAccessory {
   async handleActiveSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
     const isOn = value as boolean;
     try {
+      // Optimistically update local state immediately to prevent flickering
+      if (this.currentState) {
+        this.platform.log.debug(`[${this.device.friendlyName}] Optimistically setting power to ${isOn}`);
+        this.currentState.power = isOn;
+        // Update the characteristic value immediately
+        this.service.getCharacteristic(this.platform.Characteristic.Active)
+          .updateValue(isOn ? 1 : 0);
+      }
+
       const auxCloudAPI = await this.platform.getAuthenticatedAPI();
       auxCloudAPI.setDevice(this.device);
       await auxCloudAPI.setPower(isOn);
+      
+      // Schedule a verification update after a short delay to ensure consistency
+      this.scheduleVerificationUpdate();
+      
       callback();
     } catch (error) {
+      // If the command failed, revert the optimistic update
+      if (this.currentState) {
+        this.currentState.power = !isOn;
+        this.service.getCharacteristic(this.platform.Characteristic.Active)
+          .updateValue(this.currentState.power ? 1 : 0);
+      }
       callback(error as Error);
     }
   }
@@ -218,9 +260,6 @@ export class AirCondionerAccessory {
   async handleTargetStateSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
     const targetState = value as number;
     try {
-      const auxCloudAPI = await this.platform.getAuthenticatedAPI();
-      auxCloudAPI.setDevice(this.device);
-      
       let mode: ACMode;
       switch (targetState) {
         case this.platform.Characteristic.TargetHeaterCoolerState.COOL:
@@ -234,7 +273,35 @@ export class AirCondionerAccessory {
           break;
       }
       
-      await auxCloudAPI.setMode(mode);
+      // Optimistically update local state immediately
+      if (this.currentState) {
+        const oldMode = this.currentState.mode;
+        this.currentState.mode = mode;
+        this.service.getCharacteristic(this.platform.Characteristic.TargetHeaterCoolerState)
+          .updateValue(targetState);
+        this.service.getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
+          .updateValue(this.getCurrentHeaterCoolerState());
+        
+        const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+        auxCloudAPI.setDevice(this.device);
+        
+        try {
+          await auxCloudAPI.setMode(mode);
+          
+          // Schedule verification update
+          this.scheduleVerificationUpdate();
+        } catch (apiError) {
+          // Revert optimistic update on API failure
+          this.currentState.mode = oldMode;
+          this.updateCharacteristics();
+          throw apiError;
+        }
+      } else {
+        const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+        auxCloudAPI.setDevice(this.device);
+        await auxCloudAPI.setMode(mode);
+      }
+      
       callback();
     } catch (error) {
       callback(error as Error);
@@ -254,9 +321,38 @@ export class AirCondionerAccessory {
   async handleCoolingThresholdTemperatureSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
     const temperature = value as number;
     try {
-      const auxCloudAPI = await this.platform.getAuthenticatedAPI();
-      auxCloudAPI.setDevice(this.device);
-      await auxCloudAPI.setTemperature(temperature);
+      // Optimistically update local state
+      if (this.currentState) {
+        const oldTemp = this.currentState.targetTemperature;
+        this.currentState.targetTemperature = temperature;
+        this.service.getCharacteristic(this.platform.Characteristic.CoolingThresholdTemperature)
+          .updateValue(temperature);
+        this.service.getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
+          .updateValue(temperature);
+        
+        try {
+          const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+          auxCloudAPI.setDevice(this.device);
+          await auxCloudAPI.setTemperature(temperature);
+          
+          // Schedule verification update
+          setTimeout(() => {
+            this.updateState().catch(error => {
+              this.platform.log.error(`Failed to verify state after temperature change for ${this.device.friendlyName}:`, error);
+            });
+          }, 2000);
+        } catch (apiError) {
+          // Revert optimistic update on API failure
+          this.currentState.targetTemperature = oldTemp;
+          this.updateCharacteristics();
+          throw apiError;
+        }
+      } else {
+        const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+        auxCloudAPI.setDevice(this.device);
+        await auxCloudAPI.setTemperature(temperature);
+      }
+      
       callback();
     } catch (error) {
       callback(error as Error);
@@ -271,9 +367,38 @@ export class AirCondionerAccessory {
   async handleHeatingThresholdTemperatureSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
     const temperature = value as number;
     try {
-      const auxCloudAPI = await this.platform.getAuthenticatedAPI();
-      auxCloudAPI.setDevice(this.device);
-      await auxCloudAPI.setTemperature(temperature);
+      // Optimistically update local state
+      if (this.currentState) {
+        const oldTemp = this.currentState.targetTemperature;
+        this.currentState.targetTemperature = temperature;
+        this.service.getCharacteristic(this.platform.Characteristic.CoolingThresholdTemperature)
+          .updateValue(temperature);
+        this.service.getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
+          .updateValue(temperature);
+        
+        try {
+          const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+          auxCloudAPI.setDevice(this.device);
+          await auxCloudAPI.setTemperature(temperature);
+          
+          // Schedule verification update
+          setTimeout(() => {
+            this.updateState().catch(error => {
+              this.platform.log.error(`Failed to verify state after temperature change for ${this.device.friendlyName}:`, error);
+            });
+          }, 2000);
+        } catch (apiError) {
+          // Revert optimistic update on API failure
+          this.currentState.targetTemperature = oldTemp;
+          this.updateCharacteristics();
+          throw apiError;
+        }
+      } else {
+        const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+        auxCloudAPI.setDevice(this.device);
+        await auxCloudAPI.setTemperature(temperature);
+      }
+      
       callback();
     } catch (error) {
       callback(error as Error);
@@ -312,9 +437,28 @@ export class AirCondionerAccessory {
     }
   }
 
+  private scheduleVerificationUpdate(): void {
+    // Clear any existing verification timeout to debounce multiple rapid changes
+    if (this.verificationTimeout) {
+      clearTimeout(this.verificationTimeout);
+      this.platform.log.debug(`[${this.device.friendlyName}] Debouncing verification update`);
+    }
+    
+    // Schedule a verification update after a delay
+    this.verificationTimeout = setTimeout(() => {
+      this.platform.log.debug(`[${this.device.friendlyName}] Running verification update`);
+      this.updateState().catch(error => {
+        this.platform.log.error(`Failed to verify state for ${this.device.friendlyName}:`, error);
+      });
+    }, 2000);
+  }
+
   destroy(): void {
     if (this.updateInterval) {
       clearInterval(this.updateInterval);
+    }
+    if (this.verificationTimeout) {
+      clearTimeout(this.verificationTimeout);
     }
   }
 }
