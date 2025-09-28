@@ -1,0 +1,542 @@
+import axios, { AxiosInstance } from 'axios';
+import * as CryptoJS from 'crypto-js';
+import * as crypto from 'crypto';
+import { EventEmitter } from 'events';
+
+// Constants from the HomeAssistant implementation
+const TIMESTAMP_TOKEN_ENCRYPT_KEY = 'kdixkdqp54545^#*';
+const PASSWORD_ENCRYPT_KEY = '4969fj#k23#';
+const BODY_ENCRYPT_KEY = 'xgx3d*fe3478$ukx';
+const LICENSE = 'PAFbJJ3WbvDxH5vvWezXN5BujETtH/iuTtIIW5CE/SeHN7oNKqnEajgljTcL0fBQQWM0XAAAAAAnBhJyhMi7zIQMsUcwR/PEwGA3uB5HLOnr+xRrci+FwHMkUtK7v4yo0ZHa+jPvb6djelPP893k7SagmffZmOkLSOsbNs8CAqsu8HuIDs2mDQAAAAA=';
+const LICENSE_ID = '3c015b249dd66ef0f11f9bef59ecd737';
+const COMPANY_ID = '48eb1b36cf0202ab2ef07b880ecda60d';
+const SPOOF_APP_VERSION = '2.2.10.456537160';
+const SPOOF_USER_AGENT = 'Dalvik/2.1.0 (Linux; U; Android 12; SM-G991B Build/SP1A.210812.016)';
+const SPOOF_SYSTEM = 'android';
+const SPOOF_APP_PLATFORM = 'android';
+
+// AES IV from HomeAssistant implementation - exact bytes from Python
+const AES_INITIAL_VECTOR_BYTES = Buffer.from([
+  234, 170, 170, 58, 187, 88, 98, 162, 25, 24, 181, 119, 29, 22, 21, 170
+]);
+
+// API Server URLs
+const API_SERVERS = {
+  eu: 'https://app-service-deu-f0e9ebbb.smarthomecs.de',
+  usa: 'https://app-service-usa-fd7cc04c.smarthomecs.com',
+  cn: 'https://app-service-chn-31a93883.ibroadlink.com',
+};
+
+// AC Constants
+export enum ACMode {
+  COOLING = 0,
+  HEATING = 1,
+  DRY = 2,
+  FAN = 3,
+  AUTO = 4,
+}
+
+export enum ACFanSpeed {
+  AUTO = 0,
+  LOW = 1,
+  MEDIUM = 2,
+  HIGH = 3,
+  TURBO = 4,
+  MUTE = 5,
+}
+
+export interface DeviceState {
+  power: boolean;
+  mode: ACMode;
+  targetTemperature: number;
+  currentTemperature: number;
+  fanSpeed: ACFanSpeed;
+  verticalSwing: boolean;
+  horizontalSwing: boolean;
+  display: boolean;
+  health: boolean;
+  clean: boolean;
+  mildew: boolean;
+  sleep: boolean;
+  ecoMode: boolean;
+}
+
+export interface AuxCloudDevice {
+  endpointId: string;
+  friendlyName: string;
+  productId: string;
+  mac: string;
+  devSession: string;
+  cookie: string;
+  params: Record<string, any>;
+}
+
+export class AuxCloudAPI extends EventEmitter {
+  private axios: AxiosInstance;
+  private loginsession?: string;
+  private userid?: string;
+  private email?: string;
+  private password?: string;
+  private region: string;
+  private families: Record<string, any> = {};
+  private selectedDevice?: AuxCloudDevice;
+
+  constructor(region: string = 'eu') {
+    super();
+    this.region = region;
+    
+    const baseURL = API_SERVERS[region as keyof typeof API_SERVERS] || API_SERVERS.eu;
+    
+    this.axios = axios.create({
+      baseURL,
+      timeout: 10000,
+      headers: {
+        'Content-Type': 'application/x-java-serialized-object',
+        'licenseId': LICENSE_ID,
+        'lid': LICENSE_ID,
+        'language': 'en',
+        'appVersion': SPOOF_APP_VERSION,
+        'User-Agent': SPOOF_USER_AGENT,
+        'system': SPOOF_SYSTEM,
+        'appPlatform': SPOOF_APP_PLATFORM,
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+      },
+    });
+  }
+
+  private encryptAESWithNodeCrypto(iv: Buffer, key: Buffer, data: string): Buffer {
+    // Exactly match Python implementation: encrypt_aes_cbc_zero_padding
+    const dataBuffer = Buffer.from(data, 'utf8');
+    
+    // Calculate padding: padded_data += b"\x00" * (AES.block_size - len(data) % AES.block_size)
+    const blockSize = 16;
+    const paddingLength = blockSize - (dataBuffer.length % blockSize);
+    const paddedData = Buffer.concat([
+      dataBuffer,
+      Buffer.alloc(paddingLength, 0)
+    ]);
+
+    // Use Node.js crypto to exactly match Python's AES.new(key, AES.MODE_CBC, iv)
+    const cipher = crypto.createCipheriv('aes-128-cbc', key, iv);
+    cipher.setAutoPadding(false); // We handle padding manually
+    
+    let encrypted = cipher.update(paddedData);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    
+    return encrypted;
+  }
+
+  private getHeaders(additionalHeaders: Record<string, string> = {}): Record<string, string> {
+    return {
+      'loginsession': this.loginsession || '',
+      'userid': this.userid || '',
+      ...additionalHeaders,
+    };
+  }
+
+  async login(email: string, password: string): Promise<boolean> {
+    try {
+      this.email = email;
+      this.password = password;
+
+      const currentTime = Math.floor(Date.now() / 1000);
+      const shaPassword = CryptoJS.SHA1(`${password}${PASSWORD_ENCRYPT_KEY}`).toString();
+      
+      console.log('Login debug info:');
+      console.log('- Email:', email);
+      console.log('- SHA Password:', shaPassword);
+      console.log('- Timestamp:', currentTime);
+      
+      const payload = {
+        email,
+        password: shaPassword,
+        companyid: COMPANY_ID,
+        lid: LICENSE_ID,
+      };
+
+      const jsonPayload = JSON.stringify(payload);
+      const token = CryptoJS.MD5(`${jsonPayload}${BODY_ENCRYPT_KEY}`).toString();
+      // Use Node.js crypto to exactly match Python implementation
+      const timestampTokenString = `${currentTime}${TIMESTAMP_TOKEN_ENCRYPT_KEY}`;
+      const timestampTokenMd5 = crypto.createHash('md5').update(timestampTokenString).digest();
+      
+      console.log('- JSON Payload:', jsonPayload);
+      console.log('- Token:', token);
+      console.log('- Timestamp Token input:', timestampTokenString);
+      console.log('- Timestamp Token hex:', timestampTokenMd5.toString('hex'));
+      console.log('- Timestamp Token length:', timestampTokenMd5.length);
+      console.log('- IV bytes hex:', AES_INITIAL_VECTOR_BYTES.toString('hex'));
+      console.log('- IV length:', AES_INITIAL_VECTOR_BYTES.length);
+      
+      // Use the exact IV bytes from Python implementation
+      const encryptedBody = this.encryptAESWithNodeCrypto(AES_INITIAL_VECTOR_BYTES, timestampTokenMd5, jsonPayload);
+      
+      console.log('- Encrypted body (buffer):', encryptedBody);
+      console.log('- Encrypted body hex:', encryptedBody.toString('hex'));
+      console.log('- Encrypted body length:', encryptedBody.length);
+      console.log('- Request URL:', this.axios.defaults.baseURL + '/account/login');
+
+      const response = await this.axios.post('/account/login', encryptedBody, {
+        headers: {
+          ...this.getHeaders({
+            timestamp: currentTime.toString(),
+            token,
+          }),
+          'Content-Type': 'application/x-java-serialized-object',
+        },
+        responseType: 'json',
+        // Ensure axios doesn't transform the binary data
+        transformRequest: [(data) => data],
+      });
+
+      console.log('- Response status:', response.status);
+      console.log('- Response data:', response.data);
+
+      // Check for successful response - handle both status and error fields
+      if (response.data?.status === 0 || response.data?.error === 0) {
+        this.loginsession = response.data.loginsession;
+        this.userid = response.data.userid;
+        console.log('Login successful!');
+        return true;
+      }
+
+      const errorCode = response.data?.error ?? response.data?.status;
+      throw new Error(`Login failed with code ${errorCode}: ${JSON.stringify(response.data)}`);
+    } catch (error: any) {
+      console.error('Login error:', error);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+      }
+      return false;
+    }
+  }
+
+  async getFamilies(): Promise<any[]> {
+    if (!this.isLoggedIn()) {
+      throw new Error('Not logged in');
+    }
+
+    try {
+      const response = await this.axios.post('/appsync/group/member/getfamilylist', '', {
+        headers: this.getHeaders(),
+      });
+
+      if (response.data?.status === 0) {
+        const families = response.data.data.familyList || [];
+        this.families = {};
+        
+        for (const family of families) {
+          this.families[family.familyid] = {
+            id: family.familyid,
+            name: family.name,
+            devices: [],
+          };
+        }
+        
+        return families;
+      }
+
+      throw new Error(`Failed to get families: ${JSON.stringify(response.data)}`);
+    } catch (error) {
+      console.error('Get families error:', error);
+      throw error;
+    }
+  }
+
+  async getDevices(familyId: string): Promise<AuxCloudDevice[]> {
+    if (!this.isLoggedIn()) {
+      throw new Error('Not logged in');
+    }
+
+    try {
+      const response = await this.axios.post('/appsync/group/dev/query?action=select', '{"pids":[]}', {
+        headers: this.getHeaders({ familyid: familyId }),
+      });
+
+      if (response.data?.status === 0) {
+        const devices = response.data.data?.endpoints || [];
+        return devices.filter((device: any) => device.productId && device.mac);
+      }
+
+      throw new Error(`Failed to get devices: ${JSON.stringify(response.data)}`);
+    } catch (error) {
+      console.error('Get devices error:', error);
+      throw error;
+    }
+  }
+
+  async getDeviceParams(device: AuxCloudDevice, params: string[] = []): Promise<Record<string, any>> {
+    if (!this.isLoggedIn()) {
+      throw new Error('Not logged in');
+    }
+
+    try {
+      const cookie = JSON.parse(Buffer.from(device.cookie, 'base64').toString());
+      
+      const mappedCookie = Buffer.from(JSON.stringify({
+        device: {
+          id: cookie.terminalid,
+          key: cookie.aeskey,
+          devSession: device.devSession,
+          aeskey: cookie.aeskey,
+          did: device.endpointId,
+          pid: device.productId,
+          mac: device.mac,
+        },
+      })).toString('base64');
+
+      const data = {
+        directive: {
+          header: this.getDirectiveHeader('DNA.KeyValueControl', 'KeyValueControl', device.endpointId),
+          endpoint: {
+            devicePairedInfo: {
+              cookie: mappedCookie,
+            },
+          },
+          payload: {
+            act: 'get',
+            params: params.length > 0 ? params : [
+              'pwr', 'ac_mode', 'temp', 'envtemp', 'ac_mark', 
+              'ac_vdir', 'ac_hdir', 'scrdisp', 'ac_health', 
+              'ac_clean', 'mldprf', 'ac_slp', 'ecomode'
+            ],
+          },
+        },
+      };
+
+      const response = await this.axios.post('/device/control/v2/sdkcontrol', data, {
+        headers: this.getHeaders(),
+        params: { license: LICENSE },
+      });
+
+      if (response.data?.event?.payload?.data) {
+        const responseData = JSON.parse(response.data.event.payload.data);
+        const result: Record<string, any> = {};
+        
+        if (responseData.params && responseData.vals) {
+          for (let i = 0; i < responseData.params.length; i++) {
+            result[responseData.params[i]] = responseData.vals[i]?.[0]?.val || 0;
+          }
+        }
+        
+        return result;
+      }
+
+      throw new Error(`Failed to get device params: ${JSON.stringify(response.data)}`);
+    } catch (error) {
+      console.error('Get device params error:', error);
+      throw error;
+    }
+  }
+
+  async setDeviceParams(device: AuxCloudDevice, params: Record<string, any>): Promise<void> {
+    if (!this.isLoggedIn()) {
+      throw new Error('Not logged in');
+    }
+
+    try {
+      const cookie = JSON.parse(Buffer.from(device.cookie, 'base64').toString());
+      
+      const mappedCookie = Buffer.from(JSON.stringify({
+        device: {
+          id: cookie.terminalid,
+          key: cookie.aeskey,
+          devSession: device.devSession,
+          aeskey: cookie.aeskey,
+          did: device.endpointId,
+          pid: device.productId,
+          mac: device.mac,
+        },
+      })).toString('base64');
+
+      const paramKeys = Object.keys(params);
+      const paramVals = paramKeys.map(key => [{ idx: 1, val: params[key] }]);
+
+      const data = {
+        directive: {
+          header: this.getDirectiveHeader('DNA.KeyValueControl', 'KeyValueControl', device.endpointId),
+          endpoint: {
+            devicePairedInfo: {
+              cookie: mappedCookie,
+            },
+          },
+          payload: {
+            act: 'set',
+            params: paramKeys,
+            vals: paramVals,
+          },
+        },
+      };
+
+      const response = await this.axios.post('/device/control/v2/sdkcontrol', data, {
+        headers: this.getHeaders(),
+        params: { license: LICENSE },
+      });
+
+      if (!response.data?.event?.payload?.data) {
+        throw new Error(`Failed to set device params: ${JSON.stringify(response.data)}`);
+      }
+
+      // Emit update event
+      this.emit('updateState');
+    } catch (error) {
+      console.error('Set device params error:', error);
+      throw error;
+    }
+  }
+
+  private getDirectiveHeader(namespace: string, name: string, messageIdPrefix: string): any {
+    const timestamp = Date.now();
+    return {
+      namespace,
+      name,
+      interfaceVersion: '2',
+      senderId: 'sdk',
+      messageId: `${messageIdPrefix}-${timestamp}`,
+    };
+  }
+
+  setDevice(device: AuxCloudDevice): void {
+    this.selectedDevice = device;
+  }
+
+  getDevice(): AuxCloudDevice | undefined {
+    return this.selectedDevice;
+  }
+
+  async getCurrentState(): Promise<DeviceState | null> {
+    if (!this.selectedDevice) {
+      return null;
+    }
+
+    try {
+      const params = await this.getDeviceParams(this.selectedDevice);
+      
+      return {
+        power: Boolean(params.pwr),
+        mode: params.ac_mode || ACMode.AUTO,
+        targetTemperature: (params.temp || 240) / 10, // Convert from 240 -> 24.0°C
+        currentTemperature: (params.envtemp || 240) / 10,
+        fanSpeed: params.ac_mark || ACFanSpeed.AUTO,
+        verticalSwing: Boolean(params.ac_vdir),
+        horizontalSwing: Boolean(params.ac_hdir),
+        display: Boolean(params.scrdisp),
+        health: Boolean(params.ac_health),
+        clean: Boolean(params.ac_clean),
+        mildew: Boolean(params.mldprf),
+        sleep: Boolean(params.ac_slp),
+        ecoMode: Boolean(params.ecomode),
+      };
+    } catch (error) {
+      console.error('Get current state error:', error);
+      return null;
+    }
+  }
+
+  async setPower(on: boolean): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, { pwr: on ? 1 : 0 });
+  }
+
+  async setMode(mode: ACMode): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, { ac_mode: mode });
+  }
+
+  async setTemperature(temperature: number): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    // Convert 24.0°C -> 240
+    const temp = Math.round(temperature * 10);
+    await this.setDeviceParams(this.selectedDevice, { temp });
+  }
+
+  async setFanSpeed(speed: ACFanSpeed): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, { ac_mark: speed });
+  }
+
+  async setSwing(vertical: boolean, horizontal: boolean): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, {
+      ac_vdir: vertical ? 1 : 0,
+      ac_hdir: horizontal ? 1 : 0,
+    });
+  }
+
+  async setDisplay(on: boolean): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, { scrdisp: on ? 1 : 0 });
+  }
+
+  async setHealth(on: boolean): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, { ac_health: on ? 1 : 0 });
+  }
+
+  async setClean(on: boolean): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, { ac_clean: on ? 1 : 0 });
+  }
+
+  async setMildew(on: boolean): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, { mldprf: on ? 1 : 0 });
+  }
+
+  async setSleep(on: boolean): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, { ac_slp: on ? 1 : 0 });
+  }
+
+  async setEcoMode(on: boolean): Promise<void> {
+    if (!this.selectedDevice) {
+      throw new Error('No device selected');
+    }
+    
+    await this.setDeviceParams(this.selectedDevice, { ecomode: on ? 1 : 0 });
+  }
+
+  isLoggedIn(): boolean {
+    return !!(this.loginsession && this.userid);
+  }
+
+  async relogin(): Promise<boolean> {
+    if (this.email && this.password) {
+      return await this.login(this.email, this.password);
+    }
+    return false;
+  }
+}

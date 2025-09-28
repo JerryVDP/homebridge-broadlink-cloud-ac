@@ -1,0 +1,55 @@
+{
+  "private": false,
+  "displayName": "Broadlink AC",
+  "name": "homebridge-broadlink-cloud-ac",
+  "version": "1.0.0",
+  "description": "Control your Broadlink AC unit via Broadlink Cloud through homebridge.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/JerryVDP/homebridge-broadlink-cloud-ac.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JerryVDP/homebridge-broadlink-cloud-ac/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "homebridge": ">=1.6.0"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "lint": "eslint src/**.ts",
+    "watch": "npm run build && npm link && nodemon",
+    "build": "rimraf ./dist && tsc",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run lint",
+    "discover": "node discover-devices.js"
+  },
+  "keywords": [
+    "homebridge-plugin",
+    "aux",
+    "air-conditioner",
+    "hvac",
+    "aux-cloud",
+    "broadlink",
+    "broadlink-cloud",
+    "broadlink-ac",
+    "broadlink-air-conditioner"
+  ],
+  "dependencies": {
+    "axios": "^1.6.0",
+    "crypto-js": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/crypto-js": "^4.2.1",
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "eslint": "^8.56.0",
+    "homebridge": "^1.6.0",
+    "nodemon": "^3.0.2",
+    "rimraf": "^5.0.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

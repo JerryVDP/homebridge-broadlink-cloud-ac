@@ -1,0 +1,106 @@
+{
+    "pluginAlias": "AuxCloudPlatform",
+    "pluginType": "platform",
+    "singular": true,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "title": "Platform Name",
+          "type": "string",
+          "required": true,
+          "default": "AUX Cloud",
+          "description": "Name for this platform instance"
+        },
+        "email": {
+          "title": "AUX Cloud Email",
+          "type": "string",
+          "required": true,
+          "format": "email",
+          "placeholder": "your@email.com"
+        },
+        "password": {
+          "title": "AUX Cloud Password",
+          "type": "string",
+          "required": true,
+          "placeholder": "Your AUX Cloud password"
+        },
+        "region": {
+          "title": "Region",
+          "type": "string",
+          "required": false,
+          "enum": ["eu", "usa", "cn"],
+          "default": "eu",
+          "description": "Select your AUX Cloud region"
+        },
+        "autoDiscover": {
+          "title": "Auto-Discover Devices",
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically discover and add all devices from your AUX Cloud account"
+        },
+        "hiddenDevices": {
+          "title": "Hidden Devices",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "title": "Device ID"
+          },
+          "description": "List of device endpoint IDs or friendly names to hide from HomeKit"
+        },
+        "discoveryInterval": {
+          "title": "Discovery Interval (minutes)",
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "How often to check for new devices (0 = disabled, only discover on startup)"
+        },
+        "increments": {
+          "title": "Increments",
+          "type": "number",
+          "required": false,
+          "minimum": 0.5,
+          "maximum": 1
+        },
+        "display": {
+          "title": "Display",
+          "type": "boolean",
+          "required": false
+        },
+        "health": {
+          "title": "Health",
+          "type": "boolean",
+          "required": false
+        },
+        "clean": {
+          "title": "Clean",
+          "type": "boolean",
+          "required": false
+        },
+        "sleep": {
+          "title": "Sleep",
+          "type": "boolean",
+          "required": false
+        },
+        "mildew": {
+            "title": "Mildew",
+            "type": "boolean",
+            "required": false
+        },
+        "auto": {
+          "title": "Auto fan speed",
+          "type": "boolean",
+          "required": false
+        },
+        "swing": {
+          "title": "Swing",
+          "type": "integer",
+          "required": false,
+          "minimum": 1,
+          "maximum": 3
+        }
+      }
+    },
+    "form": null,
+    "display": null
+  }

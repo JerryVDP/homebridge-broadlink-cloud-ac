@@ -1,0 +1,38 @@
+{
+  "platforms": [
+    {
+      "platform": "AuxCloudPlatform",
+      "name": "AUX Cloud",
+      "email": "your@email.com",
+      "password": "your_password",
+      "region": "eu",
+      "autoDiscover": true,
+      "hiddenDevices": [],
+      "discoveryInterval": 0,
+      "increments": 0.5,
+      "display": false,
+      "health": false,
+      "clean": false,
+      "mildew": false,
+      "sleep": false,
+      "swing": 3
+    }
+  ],
+  "accessories": [
+    {
+      "accessory": "AirCondionerAccessory",
+      "name": "Living Room AC",
+      "email": "your@email.com",
+      "password": "your_password",
+      "region": "eu",
+      "deviceId": "your_device_endpoint_id",
+      "increments": 0.5,
+      "swing": 3,
+      "display": true,
+      "health": false,
+      "clean": false,
+      "mildew": false,
+      "sleep": false
+    }
+  ]
+}
