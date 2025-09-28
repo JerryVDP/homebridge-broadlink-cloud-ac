@@ -258,7 +258,21 @@ export class AuxCloudAPI extends EventEmitter {
 
       if (response.data?.status === 0) {
         const devices = response.data.data?.endpoints || [];
-        return devices.filter((device: any) => device.productId && device.mac);
+        const validDevices = devices.filter((device: any) => device.productId && device.mac);
+        
+        // Log device structure for debugging
+        if (validDevices.length > 0) {
+          console.log('Sample device structure:', {
+            endpointId: validDevices[0].endpointId,
+            friendlyName: validDevices[0].friendlyName,
+            hasCookie: !!validDevices[0].cookie,
+            hasDevSession: !!validDevices[0].devSession,
+            cookieLength: validDevices[0].cookie?.length,
+            keys: Object.keys(validDevices[0])
+          });
+        }
+        
+        return validDevices;
       }
 
       throw new Error(`Failed to get devices: ${JSON.stringify(response.data)}`);
@@ -274,14 +288,25 @@ export class AuxCloudAPI extends EventEmitter {
     }
 
     try {
+      // Check if device has required properties
+      if (!device.cookie || !device.devSession) {
+        console.error('Device missing required properties:', {
+          endpointId: device.endpointId,
+          hasCookie: !!device.cookie,
+          hasDevSession: !!device.devSession
+        });
+        throw new Error('Device missing required cookie or devSession');
+      }
+
       const cookie = JSON.parse(Buffer.from(device.cookie, 'base64').toString());
       
+      // Use the cookie structure directly as it comes from the API
       const mappedCookie = Buffer.from(JSON.stringify({
         device: {
-          id: cookie.terminalid,
-          key: cookie.aeskey,
+          id: cookie.terminalid || device.endpointId,
+          key: cookie.aeskey || cookie.key,
           devSession: device.devSession,
-          aeskey: cookie.aeskey,
+          aeskey: cookie.aeskey || cookie.key,
           did: device.endpointId,
           pid: device.productId,
           mac: device.mac,
@@ -311,6 +336,18 @@ export class AuxCloudAPI extends EventEmitter {
         headers: this.getHeaders(),
         params: { license: LICENSE },
       });
+
+      // Handle error responses
+      if (response.data?.event?.header?.name === 'ErrorResponse') {
+        const errorPayload = response.data.event.payload;
+        console.error('Device control error:', {
+          type: errorPayload.type,
+          message: errorPayload.message,
+          status: errorPayload.status,
+          deviceId: device.endpointId
+        });
+        throw new Error(`Device control error: ${errorPayload.type} (${errorPayload.status}): ${errorPayload.message}`);
+      }
 
       if (response.data?.event?.payload?.data) {
         const responseData = JSON.parse(response.data.event.payload.data);
