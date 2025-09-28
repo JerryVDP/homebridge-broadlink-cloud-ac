@@ -80,6 +80,8 @@ export class AuxCloudAPI extends EventEmitter {
   private region: string;
   private families: Record<string, any> = {};
   private selectedDevice?: AuxCloudDevice;
+  private lastRequestTime: number = 0;
+  private minRequestInterval: number = 1000; // 1 second between requests
 
   constructor(region: string = 'eu') {
     super();
@@ -287,6 +289,9 @@ export class AuxCloudAPI extends EventEmitter {
       throw new Error('Not logged in');
     }
 
+    // Apply rate limiting to avoid server busy errors
+    await this.rateLimit();
+
     try {
       // Check if device has required properties
       if (!device.cookie || !device.devSession) {
@@ -300,37 +305,44 @@ export class AuxCloudAPI extends EventEmitter {
 
       const cookie = JSON.parse(Buffer.from(device.cookie, 'base64').toString());
       
-      // Use the cookie structure directly as it comes from the API
+      // Use the HA extension cookie structure for better compatibility
       const mappedCookie = Buffer.from(JSON.stringify({
         device: {
-          id: cookie.terminalid || device.endpointId,
-          key: cookie.aeskey || cookie.key,
+          id: cookie.terminalid,
+          key: cookie.aeskey,
           devSession: device.devSession,
-          aeskey: cookie.aeskey || cookie.key,
+          aeskey: cookie.aeskey,
           did: device.endpointId,
           pid: device.productId,
           mac: device.mac,
         },
-      })).toString('base64');
+      }, null, 0)).toString('base64');
 
       const data = {
         directive: {
           header: this.getDirectiveHeader('DNA.KeyValueControl', 'KeyValueControl', device.endpointId),
           endpoint: {
             devicePairedInfo: {
+              did: device.endpointId,
+              pid: device.productId,
+              mac: device.mac,
+              devicetypeflag: 0, // Default value as seen in HA extension
               cookie: mappedCookie,
             },
+            endpointId: device.endpointId,
+            cookie: {},
+            devSession: device.devSession,
           },
           payload: {
             act: 'get',
-            params: params.length > 0 ? params : [
-              'pwr', 'ac_mode', 'temp', 'envtemp', 'ac_mark', 
-              'ac_vdir', 'ac_hdir', 'scrdisp', 'ac_health', 
-              'ac_clean', 'mldprf', 'ac_slp', 'ecomode'
-            ],
+            params: params.length > 0 ? params : [],
+            vals: params.length === 1 ? [[{ val: 0, idx: 1 }]] : [],
           },
         },
       };
+
+      // Add device ID to payload for compatibility
+      (data.directive.payload as any).did = device.endpointId;
 
       const response = await this.axios.post('/device/control/v2/sdkcontrol', data, {
         headers: this.getHeaders(),
@@ -373,6 +385,9 @@ export class AuxCloudAPI extends EventEmitter {
     if (!this.isLoggedIn()) {
       throw new Error('Not logged in');
     }
+
+    // Apply rate limiting to avoid server busy errors
+    await this.rateLimit();
 
     try {
       const cookie = JSON.parse(Buffer.from(device.cookie, 'base64').toString());
@@ -568,6 +583,18 @@ export class AuxCloudAPI extends EventEmitter {
 
   isLoggedIn(): boolean {
     return !!(this.loginsession && this.userid);
+  }
+
+  private async rateLimit(): Promise<void> {
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    
+    if (timeSinceLastRequest < this.minRequestInterval) {
+      const waitTime = this.minRequestInterval - timeSinceLastRequest;
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    
+    this.lastRequestTime = Date.now();
   }
 
   async relogin(): Promise<boolean> {
