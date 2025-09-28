@@ -390,8 +390,13 @@ export class AuxCloudAPI extends EventEmitter {
     await this.rateLimit();
 
     try {
+      if (!device.cookie || !device.devSession) {
+        throw new Error('Device missing required cookie or devSession');
+      }
+
       const cookie = JSON.parse(Buffer.from(device.cookie, 'base64').toString());
-      
+
+      // Build mapped cookie exactly like HA integration (compact JSON, same keys ordering not required but no spaces)
       const mappedCookie = Buffer.from(JSON.stringify({
         device: {
           id: cookie.terminalid,
@@ -412,8 +417,15 @@ export class AuxCloudAPI extends EventEmitter {
           header: this.getDirectiveHeader('DNA.KeyValueControl', 'KeyValueControl', device.endpointId),
           endpoint: {
             devicePairedInfo: {
+              did: device.endpointId,
+              pid: device.productId,
+              mac: device.mac,
+              devicetypeflag: (device as any).devicetypeFlag || 0,
               cookie: mappedCookie,
             },
+            endpointId: device.endpointId,
+            cookie: {},
+            devSession: device.devSession,
           },
           payload: {
             act: 'set',
@@ -421,18 +433,30 @@ export class AuxCloudAPI extends EventEmitter {
             vals: paramVals,
           },
         },
-      };
+      } as any;
+
+      // Add did like HA code does
+      data.directive.payload.did = device.endpointId;
+
+      // Debug logging
+      console.debug('[AuxCloudAPI] setDeviceParams request', JSON.stringify(data.directive.payload));
 
       const response = await this.axios.post('/device/control/v2/sdkcontrol', data, {
         headers: this.getHeaders(),
         params: { license: LICENSE },
       });
 
+      // Check for explicit error event
+      if (response.data?.event?.header?.name === 'ErrorResponse') {
+        const errorPayload = response.data.event.payload;
+        throw new Error(`Device control error: ${errorPayload.type} (${errorPayload.status}): ${errorPayload.message}`);
+      }
+
       if (!response.data?.event?.payload?.data) {
         throw new Error(`Failed to set device params: ${JSON.stringify(response.data)}`);
       }
 
-      // Emit update event
+      console.debug('[AuxCloudAPI] setDeviceParams success');
       this.emit('updateState');
     } catch (error) {
       console.error('Set device params error:', error);
