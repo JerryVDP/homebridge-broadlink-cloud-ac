@@ -465,13 +465,29 @@ export class AuxCloudAPI extends EventEmitter {
     }
 
     try {
+      // Get regular parameters
       const params = await this.getDeviceParams(this.selectedDevice);
+      
+      // Get ambient temperature using special 'mode' parameter
+      let currentTemp = 240; // Default fallback
+      try {
+        const modeParams = await this.getDeviceParams(this.selectedDevice, ['mode']);
+        if (modeParams.envtemp !== undefined) {
+          currentTemp = modeParams.envtemp;
+        }
+      } catch (error) {
+        console.warn('Could not get ambient temperature via mode parameter:', error instanceof Error ? error.message : String(error));
+        // Fall back to envtemp from regular params if available
+        if (params.envtemp !== undefined) {
+          currentTemp = params.envtemp;
+        }
+      }
       
       return {
         power: Boolean(params.pwr),
         mode: params.ac_mode || ACMode.AUTO,
         targetTemperature: (params.temp || 240) / 10, // Convert from 240 -> 24.0°C
-        currentTemperature: (params.envtemp || 240) / 10,
+        currentTemperature: currentTemp / 10, // Convert from 240 -> 24.0°C
         fanSpeed: params.ac_mark || ACFanSpeed.AUTO,
         verticalSwing: Boolean(params.ac_vdir),
         horizontalSwing: Boolean(params.ac_hdir),
