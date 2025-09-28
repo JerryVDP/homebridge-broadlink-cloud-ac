@@ -2,7 +2,7 @@
   "private": false,
   "displayName": "Broadlink AC",
   "name": "homebridge-broadlink-cloud-ac",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Control your Broadlink AC unit via Broadlink Cloud through homebridge.",
   "license": "Apache-2.0",
   "repository": {
