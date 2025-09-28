@@ -489,39 +489,68 @@ export class AuxCloudAPI extends EventEmitter {
     }
 
     try {
-      // Get regular parameters
-      const params = await this.getDeviceParams(this.selectedDevice);
-      
-      // Get ambient temperature using special 'mode' parameter
-      let currentTemp = 240; // Default fallback
-      try {
-        const modeParams = await this.getDeviceParams(this.selectedDevice, ['mode']);
-        if (modeParams.envtemp !== undefined) {
-          currentTemp = modeParams.envtemp;
-        }
-      } catch (error) {
-        console.warn('Could not get ambient temperature via mode parameter:', error instanceof Error ? error.message : String(error));
-        // Fall back to envtemp from regular params if available
-        if (params.envtemp !== undefined) {
-          currentTemp = params.envtemp;
+      // --- Fetch base params (mirrors HA calling get_device_params with empty list) ---
+      const params = await this.getDeviceParams(this.selectedDevice, []);
+
+      // HA logic: envtemp may be missing unless special param 'mode' is queried separately.
+      let ambient = params.envtemp;
+      if (ambient === undefined) {
+        try {
+          const special = await this.getDeviceParams(this.selectedDevice, ['mode']);
+          if (special.envtemp !== undefined) {
+            ambient = special.envtemp;
+          }
+        } catch (e) {
+          console.warn('[AuxCloudAPI] Could not fetch ambient temperature via special mode parameter:', e instanceof Error ? e.message : String(e));
         }
       }
-      
-      return {
-        power: Boolean(params.pwr),
-        mode: params.ac_mode || ACMode.AUTO,
-        targetTemperature: (params.temp || 240) / 10, // Convert from 240 -> 24.0°C
-        currentTemperature: currentTemp / 10, // Convert from 240 -> 24.0°C
-        fanSpeed: params.ac_mark || ACFanSpeed.AUTO,
-        verticalSwing: Boolean(params.ac_vdir),
-        horizontalSwing: Boolean(params.ac_hdir),
-        display: Boolean(params.scrdisp),
-        health: Boolean(params.ac_health),
-        clean: Boolean(params.ac_clean),
-        mildew: Boolean(params.mldprf),
-        sleep: Boolean(params.ac_slp),
-        ecoMode: Boolean(params.ecomode),
+      if (ambient === undefined) ambient = 240; // fallback 24.0°C
+
+      // Power (AC uses pwr, heat pump might expose ac_pwr)
+      const powerParam = (params.pwr !== undefined ? params.pwr : params.ac_pwr) ?? 0;
+
+      // Mode (ac_mode). Preserve 0 (cooling) by explicit undefined check.
+      const modeParam = params.ac_mode !== undefined ? params.ac_mode : ACMode.AUTO;
+
+      // Target temperature (temp for AC, ac_temp for HP). Default to 240 (24.0°C)
+      const tempParam = (params.temp !== undefined ? params.temp : params.ac_temp) ?? 240;
+
+      // Fan speed (ac_mark) default AUTO if missing
+      const fanParam = params.ac_mark !== undefined ? params.ac_mark : ACFanSpeed.AUTO;
+
+      // Convert reported /10 temps
+      let targetTemperature = tempParam / 10;
+      let currentTemperature = ambient / 10;
+
+      // Temperature unit handling (optional): if tempunit present and suggests Fahrenheit, convert.
+      // Empirical: tempunit==1 usually Celsius. If ==0 and values look like Fahrenheit ( > 45 ), convert.
+      const tempUnit = params.tempunit;
+      if (tempUnit === 0) {
+        if (targetTemperature > 45) {
+          targetTemperature = (targetTemperature - 32) / 1.8;
+        }
+        if (currentTemperature > 45) {
+          currentTemperature = (currentTemperature - 32) / 1.8;
+        }
+      }
+
+      const state: DeviceState = {
+        power: powerParam === 1 || powerParam === true,
+        mode: modeParam,
+        targetTemperature: Number(targetTemperature.toFixed(1)),
+        currentTemperature: Number(currentTemperature.toFixed(1)),
+        fanSpeed: fanParam,
+        verticalSwing: params.ac_vdir === 1,
+        horizontalSwing: params.ac_hdir === 1,
+        display: params.scrdisp === 1,
+        health: params.ac_health === 1,
+        clean: params.ac_clean === 1,
+        mildew: params.mldprf === 1,
+        sleep: params.ac_slp === 1,
+        ecoMode: params.ecomode === 1,
       };
+
+      return state;
     } catch (error) {
       console.error('Get current state error:', error);
       return null;
