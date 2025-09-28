@@ -7,7 +7,7 @@ import {
 } from 'homebridge';
 
 import { AuxCloudPlatform } from './platform';
-import { ACMode, DeviceState, AuxCloudDevice } from './auxCloudApi';
+import { ACMode, DeviceState, AuxCloudDevice, ACFanSpeed } from './auxCloudApi';
 
 export class AirCondionerAccessory {
   private readonly platform: AuxCloudPlatform;
@@ -17,6 +17,34 @@ export class AirCondionerAccessory {
   private updateInterval?: NodeJS.Timeout;
   private readonly service: Service;
   private readonly informationService: Service;
+  // Fan speed mapping helpers
+  private fanSpeedToPercentage(speed: ACFanSpeed): number {
+    switch (speed) {
+      case ACFanSpeed.AUTO:
+        return 0; // Represent AUTO as 0 so user can slide away from auto
+      case ACFanSpeed.MUTE:
+        return 10; // Low but distinct from AUTO
+      case ACFanSpeed.LOW:
+        return 25;
+      case ACFanSpeed.MEDIUM:
+        return 50;
+      case ACFanSpeed.HIGH:
+        return 75;
+      case ACFanSpeed.TURBO:
+        return 100;
+      default:
+        return 0;
+    }
+  }
+
+  private percentageToFanSpeed(value: number): ACFanSpeed {
+    if (value <= 5) return ACFanSpeed.AUTO;
+    if (value <= 17) return ACFanSpeed.MUTE;
+    if (value <= 37) return ACFanSpeed.LOW;
+    if (value <= 62) return ACFanSpeed.MEDIUM;
+    if (value <= 87) return ACFanSpeed.HIGH;
+    return ACFanSpeed.TURBO;
+  }
 
   constructor(platform: AuxCloudPlatform, accessory: PlatformAccessory, device: AuxCloudDevice) {
     this.platform = platform;
@@ -59,6 +87,13 @@ export class AirCondionerAccessory {
       .setProps({ minValue: 16, maxValue: 32, minStep: 0.5 })
       .on('get', this.handleHeatingThresholdTemperatureGet.bind(this))
       .on('set', this.handleHeatingThresholdTemperatureSet.bind(this));
+
+    // Optional: Fan speed via RotationSpeed characteristic
+    // This is a common pattern for HeaterCooler accessories to expose discrete speeds.
+    this.service.getCharacteristic(this.platform.Characteristic.RotationSpeed)
+      .setProps({ minValue: 0, maxValue: 100, minStep: 1 })
+      .on('get', this.handleFanSpeedGet.bind(this))
+      .on('set', this.handleFanSpeedSet.bind(this));
 
     this.initializeDevice();
   }
@@ -120,11 +155,44 @@ export class AirCondionerAccessory {
       .updateValue(this.getCurrentHeaterCoolerState());
     this.service.getCharacteristic(this.platform.Characteristic.TargetHeaterCoolerState)
       .updateValue(this.getTargetHeaterCoolerState());
+
+    // Update fan speed
+    if (this.currentState?.fanSpeed !== undefined) {
+      const pct = this.fanSpeedToPercentage(this.currentState.fanSpeed);
+      this.service.getCharacteristic(this.platform.Characteristic.RotationSpeed)
+        .updateValue(pct);
+    }
   }
 
   handleActiveGet(callback: CharacteristicGetCallback) {
     const value = this.currentState?.power ? 1 : 0;
     callback(null, value);
+  }
+
+  handleFanSpeedGet(callback: CharacteristicGetCallback) {
+    if (!this.currentState) {
+      callback(null, 0);
+      return;
+    }
+    const pct = this.fanSpeedToPercentage(this.currentState.fanSpeed);
+    callback(null, pct);
+  }
+
+  async handleFanSpeedSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
+    try {
+      const pct = typeof value === 'number' ? value : 0;
+      const desiredSpeed = this.percentageToFanSpeed(pct);
+      const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+      auxCloudAPI.setDevice(this.device);
+      await auxCloudAPI.setFanSpeed(desiredSpeed);
+      // Optimistically update local state so UI feels responsive
+      if (this.currentState) {
+        this.currentState.fanSpeed = desiredSpeed;
+      }
+      callback();
+    } catch (error) {
+      callback(error as Error);
+    }
   }
 
   async handleActiveSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
