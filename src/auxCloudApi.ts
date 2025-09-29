@@ -389,6 +389,8 @@ export class AuxCloudAPI extends EventEmitter {
       const paramKeys = Object.keys(params);
       const paramVals = paramKeys.map(key => [{ idx: 1, val: params[key] }]);
 
+      console.log(`Setting device params for ${device.friendlyName} (${device.endpointId}):`, params);
+
       const data = {
         directive: {
           header: this.getDirectiveHeader('DNA.KeyValueControl', 'KeyValueControl', device.endpointId),
