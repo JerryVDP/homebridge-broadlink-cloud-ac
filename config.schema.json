@@ -33,12 +33,7 @@
           "default": "eu",
           "description": "Select your AUX Cloud region"
         },
-        "autoDiscover": {
-          "title": "Auto-Discover Devices",
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically discover and add all devices from your AUX Cloud account"
-        },
+        
         "hiddenDevices": {
           "title": "Hidden Devices",
           "type": "array",
@@ -54,50 +49,6 @@
           "minimum": 0,
           "default": 0,
           "description": "How often to check for new devices (0 = disabled, only discover on startup)"
-        },
-        "increments": {
-          "title": "Increments",
-          "type": "number",
-          "required": false,
-          "minimum": 0.5,
-          "maximum": 1
-        },
-        "display": {
-          "title": "Display",
-          "type": "boolean",
-          "required": false
-        },
-        "health": {
-          "title": "Health",
-          "type": "boolean",
-          "required": false
-        },
-        "clean": {
-          "title": "Clean",
-          "type": "boolean",
-          "required": false
-        },
-        "sleep": {
-          "title": "Sleep",
-          "type": "boolean",
-          "required": false
-        },
-        "mildew": {
-            "title": "Mildew",
-            "type": "boolean",
-            "required": false
-        },
-        "auto": {
-          "title": "Auto fan speed",
-          "type": "boolean",
-          "required": false
-        },
-        "swing": {
-          "title": "Swing",
-          "type": "integer",
-          "required": false,
-          "minimum": 1,
-          "maximum": 3
         }
       }
     },

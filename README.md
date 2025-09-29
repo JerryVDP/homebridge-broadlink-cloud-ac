@@ -2,10 +2,6 @@
 
 Control your Broadlink AC unit through Homebridge.
 
-## Overview
-
-This plugin has been completely rewritten to use the AUX Cloud API instead of the local Broadlink API, making it compatible with a wider range of AUX AC units that are supported by the AC Freedom mobile app.
-
 ## Features
 
 - **Auto-discovery**: Automatically finds and adds all AUX AC units in your account
@@ -13,7 +9,6 @@ This plugin has been completely rewritten to use the AUX Cloud API instead of th
 - **Full HomeKit integration**: Control power, temperature, mode, fan speed, and swing
 - **Device management**: Hide specific devices using device IDs or friendly names
 - **Automatic reconnection**: Handles session expiry and network issues
-- **Flexible configuration**: Choose between platform (auto-discovery) or accessory (manual) setup
 
 ## Requirements
 
@@ -63,24 +58,10 @@ You can still configure individual devices manually if preferred:
 
 ### Finding Your Device ID
 
-#### Method 1: Use the discovery script
-```bash
-# From the plugin directory
-npm run discover your@email.com your_password eu
-
-# Or directly
-node discover-devices.js your@email.com your_password eu
-```
-
-This will show all your devices with their endpoint IDs and friendly names.
-
-#### Method 2: Check plugin logs
+#### Check plugin logs
 1. Configure the plugin with a placeholder deviceId
 2. Check the Homebridge logs during startup
 3. The available devices will be logged
-
-#### Method 3: Use the AC Freedom app
-You can use the device's friendly name from the AC Freedom app as the deviceId.
 
 ### Platform Configuration Options
 
@@ -93,30 +74,7 @@ You can use the device's friendly name from the AC Freedom app as the deviceId.
 | `autoDiscover` | boolean | No | true | Automatically discover and add all devices |
 | `hiddenDevices` | string[] | No | [] | List of device IDs to hide from HomeKit |
 | `discoveryInterval` | number | No | 0 | Re-discovery interval in minutes (0 = disabled) |
-| `increments` | number | No | 0.5 | Temperature increment (0.5 or 1) |
-| `swing` | number | No | 3 | Swing mode (1=horizontal, 2=vertical, 3=both) |
-| `display` | boolean | No | false | Show display control switch |
-| `health` | boolean | No | false | Show health mode control switch |
-| `clean` | boolean | No | false | Show clean mode control switch |
-| `mildew` | boolean | No | false | Show mildew proof control switch |
-| `sleep` | boolean | No | false | Show sleep mode control switch |
 
-### Accessory Configuration Options (Manual Mode)
-
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `name` | string | Yes | - | Name for your AC in HomeKit |
-| `email` | string | Yes | - | Your AUX Cloud account email |
-| `password` | string | Yes | - | Your AUX Cloud account password |
-| `region` | string | No | "eu" | Your AUX Cloud region ("eu", "usa", or "cn") |
-| `deviceId` | string | Yes | - | Device endpoint ID or friendly name |
-| `increments` | number | No | 0.5 | Temperature increment (0.5 or 1) |
-| `swing` | number | No | 3 | Swing mode (1=horizontal, 2=vertical, 3=both) |
-| `display` | boolean | No | false | Show display control switch |
-| `health` | boolean | No | false | Show health mode control switch |
-| `clean` | boolean | No | false | Show clean mode control switch |
-| `mildew` | boolean | No | false | Show mildew proof control switch |
-| `sleep` | boolean | No | false | Show sleep mode control switch |
 
 ### Hiding Devices
 
@@ -151,17 +109,10 @@ You can use either:
 
 ### Main Controls
 - **Power**: On/Off control
-- **Mode**: Auto, Cool, Heat, Dry, Fan
-- **Temperature**: 16-32°C with configurable increments
-- **Fan Speed**: Auto, Low, Medium, High, Turbo, Mute
-- **Swing**: Horizontal, Vertical, or Both (configurable)
-
-### Optional Controls (configurable)
-- **Display**: Screen display on/off
-- **Health**: Health/ionizer mode
-- **Clean**: Self-cleaning mode
-- **Mildew**: Mildew proof mode
-- **Sleep**: Sleep mode
+- **Mode**: Auto, Cool, Heat
+- **Temperature**: 16-32°C
+- **Fan Speed**: HomeKit's native AC Fan speed control
+- **Swing**: HomeKit's native fan oscilation control
 
 ## Troubleshooting
 
