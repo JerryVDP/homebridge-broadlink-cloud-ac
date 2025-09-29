@@ -18,6 +18,7 @@ export class AirCondionerAccessory {
   private verificationTimeout?: NodeJS.Timeout;
   private readonly service: Service;
   private readonly informationService: Service;
+  private readonly swingService: Service; // Switch to control oscillation (vertical + horizontal swing)
   // Fan speed mapping helpers
   private fanSpeedToPercentage(speed: ACFanSpeed): number {
     switch (speed) {
@@ -96,6 +97,14 @@ export class AirCondionerAccessory {
       .on('get', this.handleFanSpeedGet.bind(this))
       .on('set', this.handleFanSpeedSet.bind(this));
 
+    // Oscillation (swing) support - exposed as a Switch (simplest, broadly supported by Home apps)
+    // ON -> enable both vertical & horizontal swing; OFF -> disable both.
+    this.swingService = this.accessory.getServiceById(this.platform.Service.Switch, 'oscillation') ||
+      this.accessory.addService(this.platform.Service.Switch, `${device.friendlyName} Oscillation`, 'oscillation');
+    this.swingService.getCharacteristic(this.platform.Characteristic.On)
+      .on('get', this.handleSwingGet.bind(this))
+      .on('set', this.handleSwingSet.bind(this));
+
     this.initializeDevice();
   }
 
@@ -162,6 +171,46 @@ export class AirCondionerAccessory {
       const pct = this.fanSpeedToPercentage(this.currentState.fanSpeed);
       this.service.getCharacteristic(this.platform.Characteristic.RotationSpeed)
         .updateValue(pct);
+    }
+
+    // Update oscillation switch (true if either vertical or horizontal swing active)
+    try {
+      const swingOn = !!(this.currentState.verticalSwing || this.currentState.horizontalSwing);
+      this.swingService.getCharacteristic(this.platform.Characteristic.On).updateValue(swingOn);
+    } catch (e) {
+      this.platform.log.debug(`[${this.device.friendlyName}] Failed updating oscillation characteristic: ${e}`);
+    }
+  }
+
+  private handleSwingGet(callback: CharacteristicGetCallback) {
+    const swingOn = !!(this.currentState?.verticalSwing || this.currentState?.horizontalSwing);
+    callback(null, swingOn);
+  }
+
+  private async handleSwingSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
+    const enable = !!value;
+    try {
+      // Optimistic local update
+      if (this.currentState) {
+        this.currentState.verticalSwing = enable;
+        this.currentState.horizontalSwing = enable;
+        this.swingService.getCharacteristic(this.platform.Characteristic.On).updateValue(enable);
+      }
+
+      const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+      auxCloudAPI.setDevice(this.device);
+      await auxCloudAPI.setSwing(enable, enable);
+
+      // Verify after short delay
+      this.scheduleVerificationUpdate();
+      callback();
+    } catch (error) {
+      // Revert optimistic update if failed
+      if (this.currentState) {
+        const prevEnabled = !!(this.currentState.verticalSwing || this.currentState.horizontalSwing);
+        this.swingService.getCharacteristic(this.platform.Characteristic.On).updateValue(prevEnabled);
+      }
+      callback(error as Error);
     }
   }
 
