@@ -86,7 +86,7 @@ export class AuxCloudAPI extends EventEmitter {
   private paramQueue: Record<string, any> = {};
   private paramQueueDeviceId?: string;
   private paramQueueTimer?: NodeJS.Timeout;
-  private paramQueueDelay = 250; // ms delay window to merge (power + mode + others)
+  private paramQueueDelay = 1000; // ms delay window to merge (power + mode + others)
   private paramQueueResolvers: Array<{ resolve: () => void; reject: (e: any) => void }> = [];
   private paramFlushInProgress = false;
 

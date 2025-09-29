@@ -19,10 +19,6 @@ export class AirCondionerAccessory {
   private readonly service: Service;
   private readonly informationService: Service;
   // Swing (oscillation) is exposed via the native SwingMode characteristic (no extra Service needed).
-  // Debounce handling for fan speed changes (HomeKit slider sends many rapid updates)
-  private fanSpeedDebounceTimer?: NodeJS.Timeout;
-  private pendingFanSpeed?: ACFanSpeed;
-  private lastSentFanSpeed?: ACFanSpeed;
   // Fan speed mapping helpers
   private fanSpeedToPercentage(speed: ACFanSpeed): number {
     switch (speed) {
@@ -246,38 +242,16 @@ export class AirCondionerAccessory {
       const pct = typeof value === 'number' ? value : 0;
       const desiredSpeed = this.percentageToFanSpeed(pct);
 
-      // Optimistic UI/state update
+      // Optimistic update
       if (this.currentState) {
         this.currentState.fanSpeed = desiredSpeed;
       }
       this.service.getCharacteristic(this.platform.Characteristic.RotationSpeed).updateValue(pct);
 
-      // Store pending speed and debounce API call
-      this.pendingFanSpeed = desiredSpeed;
-
-      if (this.fanSpeedDebounceTimer) {
-        clearTimeout(this.fanSpeedDebounceTimer);
-      }
-
-      this.fanSpeedDebounceTimer = setTimeout(async () => {
-        const speedToSend = this.pendingFanSpeed;
-        if (speedToSend === undefined || speedToSend === this.lastSentFanSpeed) {
-          return; // Nothing new to send
-        }
-        try {
-          const auxCloudAPI = await this.platform.getAuthenticatedAPI();
-          auxCloudAPI.setDevice(this.device);
-          await auxCloudAPI.setFanSpeed(speedToSend);
-          this.lastSentFanSpeed = speedToSend;
-          this.scheduleVerificationUpdate();
-        } catch (apiError) {
-          this.platform.log.error(`[${this.device.friendlyName}] Failed setting fan speed: ${apiError}`);
-          // On failure, trigger a full state refresh to resync UI
-          this.updateState().catch(() => {/* swallow */});
-        }
-      }, 500); // 500ms debounce window
-
-      // Return immediately; actual network call will happen after debounce
+      const auxCloudAPI = await this.platform.getAuthenticatedAPI();
+      auxCloudAPI.setDevice(this.device);
+      await auxCloudAPI.setFanSpeed(desiredSpeed);
+      this.scheduleVerificationUpdate();
       callback();
     } catch (error) {
       callback(error as Error);
@@ -525,9 +499,6 @@ export class AirCondionerAccessory {
     }
     if (this.verificationTimeout) {
       clearTimeout(this.verificationTimeout);
-    }
-    if (this.fanSpeedDebounceTimer) {
-      clearTimeout(this.fanSpeedDebounceTimer);
     }
   }
 }
