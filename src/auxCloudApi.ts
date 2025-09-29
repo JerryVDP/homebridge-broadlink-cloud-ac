@@ -82,6 +82,13 @@ export class AuxCloudAPI extends EventEmitter {
   private selectedDevice?: AuxCloudDevice;
   private lastRequestTime: number = 0;
   private minRequestInterval: number = 1000; // 1 second between requests
+  // Batching state for outbound parameter updates to reduce duplicate beeps / rapid sequential commands
+  private paramQueue: Record<string, any> = {};
+  private paramQueueDeviceId?: string;
+  private paramQueueTimer?: NodeJS.Timeout;
+  private paramQueueDelay = 250; // ms delay window to merge (power + mode + others)
+  private paramQueueResolvers: Array<{ resolve: () => void; reject: (e: any) => void }> = [];
+  private paramFlushInProgress = false;
 
   constructor(region: string = 'eu') {
     super();
@@ -358,22 +365,68 @@ export class AuxCloudAPI extends EventEmitter {
     }
   }
 
-  async setDeviceParams(device: AuxCloudDevice, params: Record<string, any>): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not logged in');
+  async setDeviceParams(device: AuxCloudDevice, params: Record<string, any>, options?: { immediate?: boolean }): Promise<void> {
+    // Batch by default; allow immediate flush with options.immediate
+    return new Promise<void>((resolve, reject) => {
+      try {
+        // If queue holds different device, flush first
+        if (this.paramQueueDeviceId && this.paramQueueDeviceId !== device.endpointId) {
+          this.flushParamQueue().catch(err => console.error('[AuxCloudAPI] Error flushing previous device queue:', err));
+        }
+
+        this.paramQueueDeviceId = device.endpointId;
+        for (const [k, v] of Object.entries(params)) {
+          this.paramQueue[k] = v; // merge
+        }
+        this.paramQueueResolvers.push({ resolve, reject });
+
+        // Turning off (pwr:0) should flush immediately; else small delay to combine with mode etc.
+        const immediatePowerOff = Object.keys(params).includes('pwr') && params.pwr === 0;
+        const delay = options?.immediate || immediatePowerOff ? 0 : this.paramQueueDelay;
+
+        if (this.paramQueueTimer) {
+          clearTimeout(this.paramQueueTimer);
+        }
+        this.paramQueueTimer = setTimeout(() => {
+          this.flushParamQueue().catch(err => {
+            const pending = this.paramQueueResolvers.splice(0);
+            pending.forEach(p => p.reject(err));
+          });
+        }, delay);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  private async flushParamQueue(): Promise<void> {
+    if (this.paramFlushInProgress) return;
+    if (!this.paramQueueDeviceId || Object.keys(this.paramQueue).length === 0) return;
+
+    const device = this.selectedDevice && this.selectedDevice.endpointId === this.paramQueueDeviceId
+      ? this.selectedDevice
+      : undefined;
+
+    if (!device) {
+      const pendingNoDevice = this.paramQueueResolvers.splice(0);
+      pendingNoDevice.forEach(p => p.reject(new Error('No selected device for parameter queue')));
+      this.paramQueue = {};
+      this.paramQueueDeviceId = undefined;
+      return;
     }
 
-    // Apply rate limiting to avoid server busy errors
-    await this.rateLimit();
-
+    const paramsToSend = { ...this.paramQueue };
+    this.paramQueue = {};
+    this.paramQueueDeviceId = undefined;
+    const resolvers = this.paramQueueResolvers.splice(0);
+    this.paramFlushInProgress = true;
     try {
-      if (!device.cookie || !device.devSession) {
-        throw new Error('Device missing required cookie or devSession');
-      }
+      if (!this.isLoggedIn()) throw new Error('Not logged in');
+      if (!device.cookie || !device.devSession) throw new Error('Device missing required cookie or devSession');
+
+      await this.rateLimit();
 
       const cookie = JSON.parse(Buffer.from(device.cookie, 'base64').toString());
-
-      // Build mapped cookie exactly like HA integration (compact JSON, same keys ordering not required but no spaces)
       const mappedCookie = Buffer.from(JSON.stringify({
         device: {
           id: cookie.terminalid,
@@ -386,10 +439,8 @@ export class AuxCloudAPI extends EventEmitter {
         },
       })).toString('base64');
 
-      const paramKeys = Object.keys(params);
-      const paramVals = paramKeys.map(key => [{ idx: 1, val: params[key] }]);
-
-      console.log(`Setting device params for ${device.friendlyName} (${device.endpointId}):`, params);
+      const paramKeys = Object.keys(paramsToSend);
+      const paramVals = paramKeys.map(key => [{ idx: 1, val: paramsToSend[key] }]);
 
       const data = {
         directive: {
@@ -413,33 +464,29 @@ export class AuxCloudAPI extends EventEmitter {
           },
         },
       } as any;
-
-      // Add did like HA code does
       data.directive.payload.did = device.endpointId;
 
-      // Debug logging
-      console.debug('[AuxCloudAPI] setDeviceParams request', JSON.stringify(data.directive.payload));
-
+      console.debug('[AuxCloudAPI] batched setDeviceParams request', JSON.stringify(data.directive.payload));
       const response = await this.axios.post('/device/control/v2/sdkcontrol', data, {
         headers: this.getHeaders(),
         params: { license: LICENSE },
       });
 
-      // Check for explicit error event
       if (response.data?.event?.header?.name === 'ErrorResponse') {
         const errorPayload = response.data.event.payload;
         throw new Error(`Device control error: ${errorPayload.type} (${errorPayload.status}): ${errorPayload.message}`);
       }
-
       if (!response.data?.event?.payload?.data) {
         throw new Error(`Failed to set device params: ${JSON.stringify(response.data)}`);
       }
-
-      console.debug('[AuxCloudAPI] setDeviceParams success');
+      console.debug('[AuxCloudAPI] batched setDeviceParams success');
+      resolvers.forEach(r => r.resolve());
       this.emit('updateState');
-    } catch (error) {
-      console.error('Set device params error:', error);
-      throw error;
+    } catch (err) {
+      console.error('[AuxCloudAPI] batched setDeviceParams error:', err);
+      resolvers.forEach(r => r.reject(err));
+    } finally {
+      this.paramFlushInProgress = false;
     }
   }
 
