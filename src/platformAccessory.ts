@@ -16,6 +16,7 @@ export class AirCondionerAccessory {
   private currentState: DeviceState | null = null;
   private updateInterval?: NodeJS.Timeout;
   private verificationTimeout?: NodeJS.Timeout;
+  private readFromPollQueue = 0;
   private readonly service: Service;
   private readonly informationService: Service;
   // Swing (oscillation) is exposed via the native SwingMode characteristic (no extra Service needed).
@@ -134,14 +135,26 @@ export class AirCondionerAccessory {
     this.informationService.setCharacteristic(this.platform.Characteristic.SerialNumber, device.endpointId);
   }
 
+  disablePollRead(): void {
+    this.readFromPollQueue++;
+  }
+  
+  enablePollRead(): void {
+    if (this.readFromPollQueue > 0) {
+      this.readFromPollQueue--;
+    }
+  }
+
   startPolling(): void {
     this.updateInterval = setInterval(async () => {
       try {
-        await this.updateState();
+        if (this.readFromPollQueue === 0) {
+          await this.updateState();
+        }
       } catch (error) {
         this.platform.log.error(`Error updating state for ${this.device.friendlyName}:`, error);
       }
-    }, 5000); // Reduced from 10 seconds to 5 seconds for more responsive updates
+    }, 5000); // 5 Seconds
   }
 
   async updateState(): Promise<void> {
@@ -198,6 +211,7 @@ export class AirCondionerAccessory {
     // HomeKit passes 0 (disabled) / 1 (enabled)
     const enable = value === this.platform.Characteristic.SwingMode.SWING_ENABLED || value === 1;
     try {
+      this.disablePollRead();
       // Optimistic local update
       if (this.currentState) {
         this.currentState.verticalSwing = enable;
@@ -210,7 +224,7 @@ export class AirCondionerAccessory {
       auxCloudAPI.setDevice(this.device);
       await auxCloudAPI.setSwing(enable, enable);
 
-      this.scheduleVerificationUpdate();
+      
       callback();
     } catch (error) {
       // Revert optimistic update if failed
@@ -220,6 +234,8 @@ export class AirCondionerAccessory {
           .updateValue(prevEnabled ? this.platform.Characteristic.SwingMode.SWING_ENABLED : this.platform.Characteristic.SwingMode.SWING_DISABLED);
       }
       callback(error as Error);
+    } finally {
+      this.enablePollRead();
     }
   }
 
@@ -239,6 +255,7 @@ export class AirCondionerAccessory {
 
   async handleFanSpeedSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
     try {
+      this.disablePollRead();
       const pct = typeof value === 'number' ? value : 0;
       const desiredSpeed = this.percentageToFanSpeed(pct);
 
@@ -251,16 +268,19 @@ export class AirCondionerAccessory {
       const auxCloudAPI = await this.platform.getAuthenticatedAPI();
       auxCloudAPI.setDevice(this.device);
       await auxCloudAPI.setFanSpeed(desiredSpeed);
-      this.scheduleVerificationUpdate();
+      
       callback();
     } catch (error) {
       callback(error as Error);
+    } finally {
+      this.enablePollRead();
     }
   }
 
   async handleActiveSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
     const isOn = value as boolean;
     try {
+      this.disablePollRead();
       // Optimistically update local state immediately to prevent flickering
       if (this.currentState) {
         this.platform.log.debug(`[${this.device.friendlyName}] Optimistically setting power to ${isOn}`);
@@ -275,7 +295,7 @@ export class AirCondionerAccessory {
       await auxCloudAPI.setPower(isOn);
       
       // Schedule a verification update after a short delay to ensure consistency
-      this.scheduleVerificationUpdate();
+      
       
       callback();
     } catch (error) {
@@ -286,6 +306,8 @@ export class AirCondionerAccessory {
           .updateValue(this.currentState.power ? 1 : 0);
       }
       callback(error as Error);
+    } finally {
+      this.enablePollRead();
     }
   }
 
@@ -300,6 +322,7 @@ export class AirCondionerAccessory {
   async handleTargetStateSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
     const targetState = value as number;
     try {
+      this.disablePollRead();
       let mode: ACMode;
       switch (targetState) {
         case this.platform.Characteristic.TargetHeaterCoolerState.COOL:
@@ -329,7 +352,7 @@ export class AirCondionerAccessory {
           await auxCloudAPI.setMode(mode);
           
           // Schedule verification update
-          this.scheduleVerificationUpdate();
+          
         } catch (apiError) {
           // Revert optimistic update on API failure
           this.currentState.mode = oldMode;
@@ -345,6 +368,8 @@ export class AirCondionerAccessory {
       callback();
     } catch (error) {
       callback(error as Error);
+    } finally {
+      this.enablePollRead();
     }
   }
 
@@ -361,6 +386,7 @@ export class AirCondionerAccessory {
   async handleCoolingThresholdTemperatureSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
     const temperature = value as number;
     try {
+      this.disablePollRead();
       // Optimistically update local state
       if (this.currentState) {
         const oldTemp = this.currentState.targetTemperature;
@@ -396,6 +422,8 @@ export class AirCondionerAccessory {
       callback();
     } catch (error) {
       callback(error as Error);
+    } finally {
+      this.enablePollRead();
     }
   }
 
@@ -407,6 +435,7 @@ export class AirCondionerAccessory {
   async handleHeatingThresholdTemperatureSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
     const temperature = value as number;
     try {
+      this.disablePollRead();
       // Optimistically update local state
       if (this.currentState) {
         const oldTemp = this.currentState.targetTemperature;
@@ -442,6 +471,8 @@ export class AirCondionerAccessory {
       callback();
     } catch (error) {
       callback(error as Error);
+    } finally {
+      this.enablePollRead();
     }
   }
 
@@ -475,22 +506,6 @@ export class AirCondionerAccessory {
       default:
         return this.platform.Characteristic.TargetHeaterCoolerState.AUTO;
     }
-  }
-
-  private scheduleVerificationUpdate(): void {
-    // Clear any existing verification timeout to debounce multiple rapid changes
-    if (this.verificationTimeout) {
-      clearTimeout(this.verificationTimeout);
-      this.platform.log.debug(`[${this.device.friendlyName}] Debouncing verification update`);
-    }
-    
-    // Schedule a verification update after a delay
-    this.verificationTimeout = setTimeout(() => {
-      this.platform.log.debug(`[${this.device.friendlyName}] Running verification update`);
-      this.updateState().catch(error => {
-        this.platform.log.error(`Failed to verify state for ${this.device.friendlyName}:`, error);
-      });
-    }, 2000);
   }
 
   destroy(): void {
