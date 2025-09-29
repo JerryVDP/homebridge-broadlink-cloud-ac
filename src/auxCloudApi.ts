@@ -146,11 +146,6 @@ export class AuxCloudAPI extends EventEmitter {
       const currentTime = Math.floor(Date.now() / 1000);
       const shaPassword = CryptoJS.SHA1(`${password}${PASSWORD_ENCRYPT_KEY}`).toString();
       
-      console.log('Login debug info:');
-      console.log('- Email:', email);
-      console.log('- SHA Password:', shaPassword);
-      console.log('- Timestamp:', currentTime);
-      
       const payload = {
         email,
         password: shaPassword,
@@ -164,21 +159,8 @@ export class AuxCloudAPI extends EventEmitter {
       const timestampTokenString = `${currentTime}${TIMESTAMP_TOKEN_ENCRYPT_KEY}`;
       const timestampTokenMd5 = crypto.createHash('md5').update(timestampTokenString).digest();
       
-      console.log('- JSON Payload:', jsonPayload);
-      console.log('- Token:', token);
-      console.log('- Timestamp Token input:', timestampTokenString);
-      console.log('- Timestamp Token hex:', timestampTokenMd5.toString('hex'));
-      console.log('- Timestamp Token length:', timestampTokenMd5.length);
-      console.log('- IV bytes hex:', AES_INITIAL_VECTOR_BYTES.toString('hex'));
-      console.log('- IV length:', AES_INITIAL_VECTOR_BYTES.length);
-      
-      // Use the exact IV bytes from Python implementation
+      // Use the exact IV bytes
       const encryptedBody = this.encryptAESWithNodeCrypto(AES_INITIAL_VECTOR_BYTES, timestampTokenMd5, jsonPayload);
-      
-      console.log('- Encrypted body (buffer):', encryptedBody);
-      console.log('- Encrypted body hex:', encryptedBody.toString('hex'));
-      console.log('- Encrypted body length:', encryptedBody.length);
-      console.log('- Request URL:', this.axios.defaults.baseURL + '/account/login');
 
       const response = await this.axios.post('/account/login', encryptedBody, {
         headers: {
@@ -192,9 +174,6 @@ export class AuxCloudAPI extends EventEmitter {
         // Ensure axios doesn't transform the binary data
         transformRequest: [(data) => data],
       });
-
-      console.log('- Response status:', response.status);
-      console.log('- Response data:', response.data);
 
       // Check for successful response - handle both status and error fields
       if (response.data?.status === 0 || response.data?.error === 0) {
@@ -264,14 +243,12 @@ export class AuxCloudAPI extends EventEmitter {
         
         // Log device structure for debugging
         if (validDevices.length > 0) {
-          console.log('Sample device structure:', {
-            endpointId: validDevices[0].endpointId,
-            friendlyName: validDevices[0].friendlyName,
-            hasCookie: !!validDevices[0].cookie,
-            hasDevSession: !!validDevices[0].devSession,
-            cookieLength: validDevices[0].cookie?.length,
-            keys: Object.keys(validDevices[0])
-          });
+          for (const device of validDevices) {
+            console.log('Found device:', {
+              endpointId: device.endpointId,
+              friendlyName: device.friendlyName,
+            });
+          }
         }
         
         return validDevices;
