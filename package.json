@@ -1,6 +1,6 @@
 {
   "private": false,
-  "displayName": "Broadlink AC",
+  "displayName": "Broadlink Cloud AC",
   "name": "homebridge-broadlink-cloud-ac",
   "version": "0.0.18",
   "description": "Control your Broadlink AC unit via Broadlink Cloud through homebridge.",
