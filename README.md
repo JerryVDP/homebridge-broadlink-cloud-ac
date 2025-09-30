@@ -2,6 +2,12 @@
 
 Control your Broadlink AC unit through Homebridge.
 
+## Support This Project
+
+If you find this plugin helpful, consider supporting its development:
+
+[![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://www.paypal.com/donate/?hosted_button_id=HY8QDRPTKS2WA)
+
 ## Features
 
 - **Auto-discovery**: Automatically finds and adds all AUX AC units in your account
@@ -120,11 +126,6 @@ You can use either:
 - Ensure your email and password are correct
 - Make sure you're using the correct region
 - Try logging out and back in to the AC Freedom app
-
-### Device Not Found
-- Check that your `deviceId` is correct
-- Ensure the device is online in the AC Freedom app
-- Try using the device's friendly name instead of endpoint ID
 
 ### Connection Issues
 - The plugin will automatically attempt to reconnect on errors
