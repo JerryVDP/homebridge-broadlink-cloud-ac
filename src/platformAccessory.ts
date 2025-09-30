@@ -17,6 +17,7 @@ export class AirCondionerAccessory {
   private updateInterval?: NodeJS.Timeout;
   private verificationTimeout?: NodeJS.Timeout;
   private readFromPollQueue = 0;
+  private updatesWithoutTempCount = 0;
   private readonly service: Service;
   private readonly informationService: Service;
   // Swing (oscillation) is exposed via the native SwingMode characteristic (no extra Service needed).
@@ -121,7 +122,7 @@ export class AirCondionerAccessory {
       
       this.platform.log.info(`Initialized device: ${this.device.friendlyName} (${this.device.endpointId})`);
       
-      await this.updateState();
+      await this.updateState(true);
       this.startPolling();
     } catch (error) {
       this.platform.log.error(`Failed to initialize device ${this.device.friendlyName}:`, error);
@@ -149,19 +150,30 @@ export class AirCondionerAccessory {
     this.updateInterval = setInterval(async () => {
       try {
         if (this.readFromPollQueue === 0) {
-          await this.updateState();
+          const withTemp = this.updatesWithoutTempCount >= 3; // Fetch temp every ~40s
+          if (withTemp) {
+            this.updatesWithoutTempCount = 0;
+          } else {
+            this.updatesWithoutTempCount++;
+          }
+          await this.updateState(withTemp);
         }
       } catch (error) {
         this.platform.log.error(`Error updating state for ${this.device.friendlyName}:`, error);
       }
-    }, 5000); // 5 Seconds
+    }, 10000); // 10 Seconds
   }
 
-  async updateState(): Promise<void> {
+  async updateState(withTemp: boolean = true): Promise<void> {
     try {
       const auxCloudAPI = await this.platform.getAuthenticatedAPI();
       auxCloudAPI.setDevice(this.device);
-      this.currentState = await auxCloudAPI.getCurrentState();
+      const currentTemperature = this.currentState?.currentTemperature;
+      this.currentState = await auxCloudAPI.getCurrentState(withTemp);
+      if (! withTemp && this.currentState && currentTemperature !== undefined) {
+        // Preserve last known temperature if we didn't fetch it this time
+        this.currentState.currentTemperature = currentTemperature;
+      }
       this.updateCharacteristics();
     } catch (error) {
       this.platform.log.error(`Failed to update state for ${this.device.friendlyName}:`, error);
@@ -292,10 +304,7 @@ export class AirCondionerAccessory {
 
       const auxCloudAPI = await this.platform.getAuthenticatedAPI();
       auxCloudAPI.setDevice(this.device);
-      await auxCloudAPI.setPower(isOn);
-      
-      // Schedule a verification update after a short delay to ensure consistency
-      
+      await auxCloudAPI.setPower(isOn); 
       
       callback();
     } catch (error) {
@@ -401,12 +410,6 @@ export class AirCondionerAccessory {
           auxCloudAPI.setDevice(this.device);
           await auxCloudAPI.setTemperature(temperature);
           
-          // Schedule verification update
-          setTimeout(() => {
-            this.updateState().catch(error => {
-              this.platform.log.error(`Failed to verify state after temperature change for ${this.device.friendlyName}:`, error);
-            });
-          }, 2000);
         } catch (apiError) {
           // Revert optimistic update on API failure
           this.currentState.targetTemperature = oldTemp;
@@ -449,13 +452,6 @@ export class AirCondionerAccessory {
           const auxCloudAPI = await this.platform.getAuthenticatedAPI();
           auxCloudAPI.setDevice(this.device);
           await auxCloudAPI.setTemperature(temperature);
-          
-          // Schedule verification update
-          setTimeout(() => {
-            this.updateState().catch(error => {
-              this.platform.log.error(`Failed to verify state after temperature change for ${this.device.friendlyName}:`, error);
-            });
-          }, 2000);
         } catch (apiError) {
           // Revert optimistic update on API failure
           this.currentState.targetTemperature = oldTemp;

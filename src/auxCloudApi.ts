@@ -440,7 +440,7 @@ export class AuxCloudAPI extends EventEmitter {
       })).toString('base64');
 
       const paramKeys = Object.keys(paramsToSend);
-      const paramVals = paramKeys.map(key => [{ idx: 1, val: paramsToSend[key] }]);
+      const paramVals = paramKeys.map((key, index) => [{ idx: index + 1, val: paramsToSend[key] }]);
 
       const data = {
         directive: {
@@ -509,7 +509,7 @@ export class AuxCloudAPI extends EventEmitter {
     return this.selectedDevice;
   }
 
-  async getCurrentState(): Promise<DeviceState | null> {
+  async getCurrentState(withTemp: boolean = true): Promise<DeviceState | null> {
     if (!this.selectedDevice) {
       return null;
     }
@@ -520,7 +520,7 @@ export class AuxCloudAPI extends EventEmitter {
 
       // HA logic: envtemp may be missing unless special param 'mode' is queried separately.
       let ambient = params.envtemp;
-      if (ambient === undefined) {
+      if (withTemp && ambient === undefined) {
         try {
           const special = await this.getDeviceParams(this.selectedDevice, ['mode']);
           if (special.envtemp !== undefined) {
@@ -681,6 +681,7 @@ export class AuxCloudAPI extends EventEmitter {
   }
 
   private async rateLimit(): Promise<void> {
+    return;
     const now = Date.now();
     const timeSinceLastRequest = now - this.lastRequestTime;
     
